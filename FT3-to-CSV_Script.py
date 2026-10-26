@@ -310,18 +310,33 @@ def create_result_csv_files():
         }
     )
 
-# Checks each worksheet data row to make sure it has the information needed to creates its CSV file
-# Checks Time/Date and Serial number specifically 
+# Returns a normalized serial number only when it contains exactly 12 ASCII digits and starts with 19.
+    def valid_serial_number(value):
+        if isinstance(value, float) and value.is_integer():
+            serial_number = str(int(value))
+        else:
+            serial_number = str(value).strip()
+        if (
+            len(serial_number) == 12
+            and serial_number.startswith("19")
+            and all("0" <= digit <= "9" for digit in serial_number)
+        ):
+            return serial_number
+        return None
+
+# Checks each worksheet data row to make sure it has the information needed to create its CSV file.
     for row_index in range(first_data_row, worksheet.nrows): # Goes through the rows from the first data row to the end of the workheet
         source_row = worksheet.row_values(row_index)
         if not any(str(value).strip() for value in source_row):  # Check whether every examined cell is empty or whitespaced
             continue
-        if ( #Checks wheter the Time and Date cell or the Serial Number cell is empty
-            not str(worksheet.cell_value(row_index, source_columns["time"])).strip()
-            or not str(worksheet.cell_value(row_index, source_columns["serial"])).strip()
-        ): 
+        serial_number = valid_serial_number(
+            worksheet.cell_value(row_index, source_columns["serial"])
+        )
+        if serial_number is None:
+            continue
+        if not str(worksheet.cell_value(row_index, source_columns["time"])).strip():
             raise ValueError(
-                f"Worksheet row {row_index + 1} has a missing Time and Date or Serial Number; cannot determine the CSV filename."
+                f"Worksheet row {row_index + 1} has a missing Time and Date; cannot determine the CSV filename."
             )
 
 # Define the rule for N/A and blank values in standard fields in the excel sheet, NOT including MPPT/ABVF sections
@@ -434,6 +449,9 @@ def create_result_csv_files():
         serial_value = worksheet.cell_value(row_index, source_columns["serial"])  # Read the source Serial Number cell.
         if not any(str(value).strip() for value in worksheet.row_values(row_index)):  # Check whether every cell in the current row is empty
             continue
+        serial_number = valid_serial_number(serial_value)
+        if serial_number is None:
+            continue
 
 # Converts the workbook's Time and Date value into a consistent Python date/time, then formats it for the CSV
         if date_cell.ctype == xlrd.XL_CELL_DATE:
@@ -454,13 +472,6 @@ def create_result_csv_files():
 
         #Formats the CSV date and time with a four-digit year.
         date_value = timestamp.strftime("%Y/%m/%d %H:%M:%S")
-
-        # Converts serial number to text
-        if isinstance(serial_value, float) and serial_value.is_integer(): #Checks whether value is a decimal number
-            serial_number = str(int(serial_value))  # removes the decimal and converts number to integer as text
-        else:
-            serial_number = str(serial_value).strip()
-
 
         #Builds filename of the CSV and checks whether the serial number in the filename matches the serial number in the original source file
         filename = f"FT3_{serial_number}_{timestamp:%Y-%m-%d_%H-%M-%S}.csv"
