@@ -20,7 +20,7 @@ print("Output folder:", output_results_dir)
 #------------------- Creating Headers in the CSV ------------------------
 # These CSV Header names define both the order and spelling of columns in every output CSV.
 csv_headers = [  
-    "Time and Date",  # Add 'Time and Date' as a CSV column name.
+    "Test Time",
     "Tester",
     "Serial Number",
     "Overall Verdict",
@@ -463,8 +463,8 @@ def create_result_csv_files():
 
 
         #Builds filename of the CSV and checks whether the serial number in the filename matches the serial number in the original source file
-        filename = f"FT3_{serial_number}_{timestamp:%Y_%m_%d_%H-%M-%S}.csv"
-        filename_serial = filename[len("FT3_") :].rsplit(f"_{timestamp:%Y_%m_%d_%H-%M-%S}.csv", 1)[0]
+        filename = f"FT3_{serial_number}_{timestamp:%Y-%m-%d_%H-%M-%S}.csv"
+        filename_serial = filename[len("FT3_") :].rsplit(f"_{timestamp:%Y-%m-%d_%H-%M-%S}.csv", 1)[0]
         if filename_serial != serial_number:
             raise ValueError(
                 f"Entry serial number {serial_number!r} does not match the serial number in file name {filename!r}."
@@ -478,7 +478,7 @@ def create_result_csv_files():
         # Pairing CSV column (header) name entries with the values for the source Excel workbook
         #row_index starts from the first data row in the worksheet
         mapped_values = {
-            "Time and Date": date_value,
+            "Test Time": date_value,
             "Tester": map_standard_value(worksheet.cell_value(row_index, source_columns["tester"])),
             "Serial Number": map_standard_value(serial_number),
             "Overall Verdict": map_standard_value(worksheet.cell_value(row_index, source_columns["overall_verdict"])),
@@ -577,7 +577,7 @@ def create_result_csv_files():
 
             if not existing_rows:  # If the existing CSV file has no rows
                 existing_rows = [csv_headers]
-            elif existing_rows[0] == ["Test Time"] + csv_headers[1:]:
+            elif existing_rows[0] == ["Time and Date"] + csv_headers[1:]:
                 existing_rows[0] = csv_headers
             elif existing_rows[0] != csv_headers:
                 raise ValueError(f"Unexpected CSV header in {csv_path!r}.")
@@ -595,7 +595,7 @@ def create_result_csv_files():
                     )
 
                 #Checks the Time and Date value in an existing CSV data row
-                existing_time = existing_row[csv_headers.index("Time and Date")]
+                existing_time = existing_row[csv_headers.index("Test Time")]
                 existing_timestamp = None
                 for date_format in date_formats:  # Try each accepted date layout.
                     try: 
