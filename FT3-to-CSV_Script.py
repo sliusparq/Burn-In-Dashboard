@@ -64,6 +64,7 @@ def create_result_csv_files():
         "%Y/%m/%d %H:%M",
         "%Y-%m-%d %H:%M",
         "%y/%m/%d %H:%M:%S",
+        "%Y/%m/%d",
     )
 
     workbook_path = os.path.join(script_dir, "result_FT3_Quad2000.xls")  # Gets path to the .xls file in the same folder as this script
@@ -451,8 +452,8 @@ def create_result_csv_files():
                 raise ValueError(
                     f"Invalid Time and Date value on worksheet row {row_index + 1}: {date_value!r}")
 
-        #Formats the date in timestamp as YYYY/MM/DD HH:MM:SS and saves it in data_value
-        date_value = timestamp.strftime("%y/%m/%d %H:%M:%S")
+        #Formats the CSV date and time with a four-digit year.
+        date_value = timestamp.strftime("%Y/%m/%d %H:%M:%S")
 
         # Converts serial number to text
         if isinstance(serial_value, float) and serial_value.is_integer(): #Checks whether value is a decimal number
@@ -492,9 +493,14 @@ def create_result_csv_files():
             #Adds the 4 ABVF time delay values to the mapped_values{}
             #loops through ABVF_columns, which contains labels and column numbers i.e. [ABVF 1: 6]
             **{
-                csv_header: worksheet.cell_value(row_index, source_column) # reads the delay value
+                csv_header: ( #If the cell is empty, it populates it with 'N/A', otherwise it keeps its original value
+                    "N/A"
+                    if not str(value).strip()
+                    else value
+                )
                 for csv_header, source_column in abvf_columns.items() #loop through the entries in abvf_columns, and skip the verdict entries
-                if not csv_header.startswith("ABVF Verdict ")
+                if not csv_header.startswith("ABVF Verdict ") #skips verdict fields, this loop is only for delay values
+                for value in (worksheet.cell_value(row_index, source_column),)
             },
         }
 
@@ -597,11 +603,14 @@ def create_result_csv_files():
                         break
                     except ValueError:
                         continue
-                if existing_timestamp != timestamp:  # Compares parsed CSV date/time with date/time of the current workbook, if they differ, the script raises an error
+                existing_date_only = existing_time == timestamp.strftime("%Y/%m/%d")
+                if existing_timestamp is None or (
+                    existing_timestamp != timestamp and not existing_date_only
+                ):
                     raise ValueError(
                         f"Entry Time and Date {existing_time!r} does not match the date and time in file name {filename!r}."
                     )
-                if existing_timestamp == timestamp and existing_serial == serial_number:
+                if existing_serial == serial_number:
                     matching_row = existing_row
                     break
 
