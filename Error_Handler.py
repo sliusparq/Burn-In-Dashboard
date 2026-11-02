@@ -29,7 +29,7 @@ def resolve_source_file(entered_name):
     else:
         candidates = [
             script_dir / f"{name}{extension}"
-            for extension in (".xls", ".xlsx")
+            for extension in (".xls", ".xlsx", ".xlsm")
         ]
     existing = [path for path in candidates if path.is_file()]
     if not existing:
@@ -280,8 +280,8 @@ def prompt_to_resolve_verdict_mismatches(mismatches):
             break
         print("The input is invalid. Please enter y or n.")
 
-    csv_assessed_conflicts = 0
     resolved_count = 0
+    retained_error_count = 0
     resolved_files = set()
     for filename, (timestamp, pass_fail_result, overall_verdict) in mismatches.items():
         pass_fail_valid = pass_fail_result in ("pass", "fail")
@@ -328,11 +328,23 @@ def prompt_to_resolve_verdict_mismatches(mismatches):
             replacement_verdict = assess_csv_verdict(
                 rows[0], matching_rows[0]
             )
-            csv_assessed_conflicts += 1
         else:
             replacement_verdict = (
                 pass_fail_result if pass_fail_valid else overall_verdict
             ).title()
+
+        matching_rows[0][verdict_column] = replacement_verdict
+        has_error_entries = any(
+            cell.strip().casefold() == "error"
+            for row in rows[1:]
+            for cell in row
+        )
+        with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+            csv.writer(csv_file).writerows(rows)
+        resolved_files.add(filename)
+        if has_error_entries:
+            retained_error_count += 1
+            continue
 
         resolved_path = resolved_dir / filename
         if resolved_path.exists():
@@ -340,15 +352,11 @@ def prompt_to_resolve_verdict_mismatches(mismatches):
                 f"Cannot move resolved CSV because the destination already exists: {resolved_path}"
             )
         resolved_dir.mkdir(exist_ok=True)
-        matching_rows[0][verdict_column] = replacement_verdict
-        with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
-            csv.writer(csv_file).writerows(rows)
         csv_path.rename(resolved_path)
         resolved_count += 1
-        resolved_files.add(filename)
 
     print(f"Files resolved and moved to Resolved Files: {resolved_count}")
-    print(f"Conflicting valid source verdict files assessed from CSV data: {csv_assessed_conflicts}")
+    print(f"Resolved files retained in Error Files due to ERROR entries: {retained_error_count}")
     if resolved_count:
         print(f"Resolved CSV files moved to: {resolved_dir}")
     return resolved_files
@@ -377,6 +385,38 @@ def prompt_for_error_file_names(error_entry_files, verdict_mismatch_files, abvf_
         else:
             print("  None")
 
+
+def return_resolved_csvs_with_errors():
+    if not resolved_dir.is_dir():
+        return 0
+
+    moved_count = 0
+    for path in resolved_dir.iterdir():
+        if not path.is_file() or path.suffix.casefold() != ".csv":
+            continue
+        with path.open(newline="", encoding="utf-8") as csv_file:
+            rows = list(csv.reader(csv_file))
+        if not any(
+            cell.strip().casefold() == "error"
+            for row in rows[1:]
+            for cell in row
+        ):
+            continue
+
+        error_path = error_dir / path.name
+        if error_path.exists():
+            raise FileExistsError(
+                f"Cannot return resolved CSV because the error-folder file already exists: {error_path}"
+            )
+        error_dir.mkdir(exist_ok=True)
+        path.rename(error_path)
+        moved_count += 1
+    return moved_count
+
+
+returned_error_files = return_resolved_csvs_with_errors()
+if returned_error_files:
+    print(f"Resolved CSV files with ERROR entries returned to {error_dir.name}: {returned_error_files}")
 
 if not error_dir.is_dir():
     print(f"No files found in {error_dir.name} folder.")
