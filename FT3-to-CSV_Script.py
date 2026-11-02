@@ -3,19 +3,132 @@
 
 import csv
 import os
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
+from time import perf_counter
+import openpyxl
 import xlrd  # for reading Excel workbook
 
 # ------------------- SETUP DIRECTORIES ------------------- 
 script_dir = os.path.dirname(os.path.abspath(__file__))  # Get current directory
 os.chdir(script_dir)  # Use the script folder as the current working directory.
 
-# Keep all generated CSV files together in the "Results" folder"
-output_results_dir = os.path.join(script_dir, "Results")  # Build path to new "Results" folder.
+supported_extensions = (".csv", ".xls", ".xlsx", ".xlsm") #Supported file formats for source file
+
+# User enters the filename instead of hardcoded filename value
+def resolve_source_file(entered_name):
+    name = entered_name.strip().strip('"')
+    if not name or Path(name).name != name:
+        raise FileNotFoundError(
+            "File cannot be found. Check if it's the right extension "
+            f"({', '.join(supported_extensions)})."
+        )
+    suffix = Path(name).suffix.casefold()
+    if suffix:
+        if suffix not in supported_extensions:
+            raise FileNotFoundError(
+                "File cannot be found. Check if it's the right extension "
+                f"({', '.join(supported_extensions)})."
+            )
+        candidates = [Path(script_dir) / name]
+    else:
+        candidates = [
+            Path(script_dir) / f"{name}{extension}"
+            for extension in (".xls", ".xlsx")
+        ]
+    existing = [path for path in candidates if path.is_file()]
+    if not existing:
+        raise FileNotFoundError(
+            "File cannot be found. Check if it's the right extension "
+            f"({', '.join(supported_extensions)})."
+        )
+    if len(existing) > 1:
+        matches = ", ".join(path.name for path in existing)
+        raise ValueError(
+            f"Multiple source files match {name!r}: {matches}. Specify the extension."
+        )
+    return existing[0]
+
+
+class CellValue:
+    def __init__(self, value):
+        self.value = value
+        self.ctype = (
+            xlrd.XL_CELL_DATE
+            if isinstance(value, (date, datetime))
+            else xlrd.XL_CELL_EMPTY
+            if value is None
+            else xlrd.XL_CELL_TEXT
+        )
+
+
+class WorksheetValues:
+    def __init__(self, rows):
+        self._rows = [list(row) for row in rows]
+        self.nrows = len(self._rows)
+        self.ncols = max((len(row) for row in self._rows), default=0)
+
+    def row_values(self, row_index):
+        row = self._rows[row_index]
+        return row + [""] * (self.ncols - len(row))
+
+    def cell_value(self, row_index, column_index):
+        if column_index >= len(self._rows[row_index]):
+            return ""
+        value = self._rows[row_index][column_index]
+        return "" if value is None else value
+
+    def cell(self, row_index, column_index):
+        return CellValue(self.cell_value(row_index, column_index))
+
+
+class SourceWorkbook:
+    def __init__(self, worksheet, datemode=0):
+        self._worksheet = worksheet
+        self.datemode = datemode
+
+    def sheet_by_index(self, index):
+        if index != 0:
+            raise IndexError("The source file contains only one worksheet.")
+        return self._worksheet
+
+
+def open_source_workbook(path):
+    suffix = Path(path).suffix.casefold()
+    if suffix == ".xls":
+        workbook = xlrd.open_workbook(str(path))
+        return SourceWorkbook(workbook.sheet_by_index(0), workbook.datemode)
+    if suffix in (".xlsx", ".xlsm"):
+        workbook = openpyxl.load_workbook(path, data_only=True, read_only=True)
+        try:
+            worksheet = next(iter(workbook.worksheets))
+            rows = WorksheetValues(worksheet.iter_rows(values_only=True))
+        finally:
+            workbook.close()
+        return SourceWorkbook(rows)
+    if suffix == ".csv":
+        with Path(path).open(newline="", encoding="utf-8-sig") as csv_file:
+            return SourceWorkbook(WorksheetValues(csv.reader(csv_file)))
+    raise ValueError(f"Unsupported source file extension: {suffix}")
+
+
+source_workbook_filename = input(
+    "Enter the source filename (extension optional): "
+)
+source_workbook_path = resolve_source_file(source_workbook_filename)
+source_workbook_filename = os.path.basename(source_workbook_path)
+
+results_folder_name = f"Results_{os.path.splitext(source_workbook_filename)[0]}"
+output_results_dir = os.path.join(script_dir, results_folder_name)
 os.makedirs(output_results_dir, exist_ok=True)  # Create the Results folder if it is not already present.
+error_folder_name = f"Error Files_{os.path.splitext(source_workbook_filename)[0]}"
+output_error_dir = os.path.join(script_dir, error_folder_name)
+os.makedirs(output_error_dir, exist_ok=True) # Create an Error Files folder to direct CSV files with ERROR entries
+runtime_start = perf_counter()
 
 print("Working directory:", script_dir)
 print("Output folder:", output_results_dir)
+print("Error files folder:", output_error_dir)
 
 #------------------- Creating Headers in the CSV ------------------------
 # These CSV Header names define both the order and spelling of columns in every output CSV.
@@ -67,11 +180,11 @@ def create_result_csv_files():
         "%Y/%m/%d",
     )
 
-    workbook_path = os.path.join(script_dir, "result_FT3_Quad2000.xls")  # Gets path to the .xls file in the same folder as this script
+    workbook_path = source_workbook_path
     if not os.path.isfile(workbook_path):  # Check whether the specified file exists.
         raise FileNotFoundError(f"Excel workbook not found: {workbook_path}")  # Stop if required input xls file is missing
 
-    workbook = xlrd.open_workbook(workbook_path)
+    workbook = open_source_workbook(workbook_path)
     worksheet = workbook.sheet_by_index(0)
 
     header_row = None  # header_row used to store the row number containing the main headers
@@ -305,6 +418,7 @@ def create_result_csv_files():
             "ac_power": find_header("ac power", "AC Power")[1] + 1, #[1] + 1 moves one column over because the first col is a colour, 2nd contains the Pass/Fail result
             #find_header() returns a pair: (row number, column number)
             #the [1] returns only the column number (second item)
+            "pass_fail_test": find_header("pass or fail the test", "Pass or Fail the Test")[1] + 1,
             "maximum_power": find_header("maximum power", "Maximum Power")[1],
             "gfdi_result": gfdi_header[1] + 1,
         }
@@ -324,6 +438,33 @@ def create_result_csv_files():
             return serial_number
         return None
 
+    def parse_timestamp(date_cell):
+        if isinstance(date_cell.value, datetime):
+            return date_cell.value
+        if date_cell.ctype == xlrd.XL_CELL_DATE:
+            return xlrd.xldate_as_datetime(date_cell.value, workbook.datemode)
+        date_value = " ".join(str(date_cell.value).split())
+        for date_format in date_formats:
+            try:
+                return datetime.strptime(date_value, date_format)
+            except ValueError:
+                continue
+        return None
+
+    invalid_serial_rows = 0
+
+    # Direct all CSV files with ERROR entries into "Error Files" folder
+    def organize_csv_file(csv_path, has_errors):
+        destination_dir = output_error_dir if has_errors else output_results_dir
+        destination_path = os.path.join(destination_dir, os.path.basename(csv_path))
+        if os.path.abspath(csv_path) == os.path.abspath(destination_path):
+            return
+        if os.path.exists(destination_path):
+            raise FileExistsError(
+                f"Cannot move {csv_path!r}; destination already exists: {destination_path!r}"
+            )
+        os.replace(csv_path, destination_path)
+
 # Checks each worksheet data row to make sure it has the information needed to create its CSV file.
     for row_index in range(first_data_row, worksheet.nrows): # Goes through the rows from the first data row to the end of the workheet
         source_row = worksheet.row_values(row_index)
@@ -333,6 +474,7 @@ def create_result_csv_files():
             worksheet.cell_value(row_index, source_columns["serial"])
         )
         if serial_number is None:
+            invalid_serial_rows += 1
             continue
         if not str(worksheet.cell_value(row_index, source_columns["time"])).strip():
             raise ValueError(
@@ -454,24 +596,27 @@ def create_result_csv_files():
             continue
 
 # Converts the workbook's Time and Date value into a consistent Python date/time, then formats it for the CSV
-        if date_cell.ctype == xlrd.XL_CELL_DATE:
-            timestamp = xlrd.xldate_as_datetime(date_cell.value, workbook.datemode)
-        else:
+        timestamp = parse_timestamp(date_cell)
+        if timestamp is None:
             date_value = " ".join(str(date_cell.value).split())
-            timestamp = None  # no valid time/date has been parsed yet
-            for date_format in date_formats:  # Try each accepted date layout.
-                try:
-                    timestamp = datetime.strptime(date_value, date_format)
-                    #If it works, the result is saved in timestamp, and break stops trying other formats
-                    break
-                except ValueError:  # format didn't match, so continue tries the next one
-                    continue
-            if timestamp is None: #if none of the formats work, stays None, and raises an error
-                raise ValueError(
-                    f"Invalid Time and Date value on worksheet row {row_index + 1}: {date_value!r}")
+            raise ValueError(
+                f"Invalid Time and Date value on worksheet row {row_index + 1}: {date_value!r}"
+            )
 
         #Formats the CSV date and time with a four-digit year.
         date_value = timestamp.strftime("%Y/%m/%d %H:%M:%S")
+
+        # Checks if P/F result in "Pass or Fail the Test" column matches the "Overall Verdict" column
+        pass_fail_result = normalized_header(
+            worksheet.cell_value(row_index, source_columns["pass_fail_test"])
+        )
+        overall_verdict = normalized_header(
+            worksheet.cell_value(row_index, source_columns["overall_verdict"])
+        )
+        has_verdict_mismatch = (
+            pass_fail_result not in ("pass", "fail")
+            or overall_verdict != pass_fail_result
+        )
 
         #Builds filename of the CSV and checks whether the serial number in the filename matches the serial number in the original source file
         filename = f"FT3_{serial_number}_{timestamp:%Y-%m-%d_%H-%M-%S}.csv"
@@ -579,8 +724,25 @@ def create_result_csv_files():
         for column, value in mapped_values.items():
             row[csv_headers.index(column)] = value 
 
-        # Build the full output path for this record's CSV file
-        csv_path = os.path.join(output_results_dir, filename)
+        has_error_fields = any(
+            isinstance(value, str) and value.strip().casefold() == "error"
+            for value in row
+        )
+
+        # Reuse an existing CSV in either output folder, if present.
+        results_csv_path = os.path.join(output_results_dir, filename)
+        error_csv_path = os.path.join(output_error_dir, filename)
+        if os.path.isfile(results_csv_path) and os.path.isfile(error_csv_path):
+            raise FileExistsError(
+                f"CSV exists in both output folders: {results_csv_path!r} and {error_csv_path!r}"
+            )
+        if os.path.isfile(results_csv_path):
+            csv_path = results_csv_path
+        elif os.path.isfile(error_csv_path):
+            csv_path = error_csv_path
+        else:
+            destination_dir = output_error_dir if has_error_fields else output_results_dir
+            csv_path = os.path.join(destination_dir, filename)
 
         if os.path.isfile(csv_path):  # Check whether the specified file exists.
             with open(csv_path, newline="", encoding="utf-8") as csv_file: 
@@ -633,15 +795,31 @@ def create_result_csv_files():
                     #This updates the existing row rather than creating a duplicate
                     matching_row[csv_headers.index(column)] = value
 
-            with open(csv_path, "w", newline="", encoding="utf-8") as csv_file:
-                csv.writer(csv_file).writerows(existing_rows)  # Write all rows to the CSV using proper CSV formatting.
-        
-        else: #If the CSV file doesnt exist yet
-            #Writes into the new CSV file
-            with open(csv_path, "w", newline="", encoding="utf-8") as csv_file:
-                writer = csv.writer(csv_file)
-                writer.writerow(csv_headers)  # Write CSV headers into the CSV file
-                writer.writerow(row)  # Writes current test record into the next row, putting each value in its corresponding column
+        else:
+            existing_rows = [csv_headers, row]
+
+        with open(csv_path, "w", newline="", encoding="utf-8") as csv_file:
+            csv.writer(csv_file).writerows(existing_rows)
+        has_errors_in_file = any(
+            isinstance(value, str) and value.strip().casefold() == "error"
+            for existing_row in existing_rows[1:]
+            for value in existing_row
+        )
+        organize_csv_file(
+            csv_path, has_errors_in_file or has_verdict_mismatch
+        )
+
+    print(f"CSV outputs skipped due to invalid serial number: {invalid_serial_rows}")
+    error_csv_count = sum(
+        1
+        for entry in os.scandir(output_error_dir)
+        if entry.is_file() and entry.name.casefold().endswith(".csv")
+    )
+    print(f"CSV files directed to ERROR folder: {error_csv_count}")
 
 
-create_result_csv_files()
+try:
+    create_result_csv_files()
+finally:
+    # Prints runtime of how long this program took to run in seconds 
+    print(f"Runtime: {perf_counter() - runtime_start:.2f} seconds") 
